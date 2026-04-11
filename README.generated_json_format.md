@@ -365,9 +365,22 @@ Liste des groupes d'amélioration.
 
 Type : `string`
 
-Champ optionnel.
+Catégorie calculée à l'extraction à partir :
 
-Présent seulement si Army Forge fournit un type d'unité.
+- du système de jeu
+- de la présence de certaines règles comme `Héros`, `Aéronef`, `Artillerie`
+- de la taille de l'unité
+
+Valeurs typiques :
+
+- `Héros`
+- `Unité de base`
+- `Véhicule légers / Petits monstres`
+- `Véhicules / Monstres`
+- `Artillerie`
+- `Aéronef`
+- `Titans`
+- `Héros Narratifs`
 
 ## Format d'une arme
 

@@ -50,11 +50,14 @@ ABOUT_OPR_PARAGRAPHS = [
 ]
 
 UNIT_TYPE_ORDER = [
-    "Héros",
-    "Infanterie",
-    "Véhicule légers / Petits monstres",
-    "Véhicules / Monstres",
-    "Titans",
+    "Héro",
+    "Unité de base",
+    "Véhicule léger / Petit monstre",
+    "Véhicule / Monstre",
+    "Artillerie",
+    "Aéronef",
+    "Titan",
+    "Héro Narratif"
 ]
 
 UNTYPED_UNIT_GROUP_LABEL = "Autres unités"

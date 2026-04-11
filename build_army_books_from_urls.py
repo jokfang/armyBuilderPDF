@@ -58,19 +58,37 @@ def main() -> None:
         raise SystemExit(f"No URLs found in list: {args.list_path}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    failures: list[tuple[str, str]] = []
 
     for url in urls:
-        data, basename = extract_from_url(
-            url,
-            language=args.language,
-            dictionary_path=args.dictionary,
-        )
-        json_path = args.output_dir / f"{basename}.json"
-        pdf_path = args.output_dir / f"{basename}.pdf"
+        try:
+            data, basename = extract_from_url(
+                url,
+                language=args.language,
+                dictionary_path=args.dictionary,
+            )
+            json_path = args.output_dir / f"{basename}.json"
+            pdf_path = args.output_dir / f"{basename}.pdf"
 
-        json_path.write_text(f"{json.dumps(data, ensure_ascii=False, indent=2)}\n", encoding="utf-8")
-        build_pdf(data, pdf_path, print_friendly=args.print_friendly)
-        print(f"Generated {json_path.as_posix()} and {pdf_path.as_posix()}")
+            json_path.write_text(f"{json.dumps(data, ensure_ascii=False, indent=2)}\n", encoding="utf-8")
+            build_pdf(data, pdf_path, print_friendly=args.print_friendly)
+            print(f"Generated {json_path.as_posix()} and {pdf_path.as_posix()}")
+        except PermissionError as error:
+            failure_message = f"{type(error).__name__}: {error}"
+            failures.append((url, failure_message))
+            print(f"Skipped {url}: {failure_message}")
+        except Exception as error:
+            failure_message = f"{type(error).__name__}: {error}"
+            failures.append((url, failure_message))
+            print(f"Failed {url}: {failure_message}")
+
+    if failures:
+        print("")
+        print("Summary of failed URLs:")
+        for failed_url, message in failures:
+            print(f"- {failed_url}")
+            print(f"  {message}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

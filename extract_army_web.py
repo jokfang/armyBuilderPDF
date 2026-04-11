@@ -20,6 +20,11 @@ GAME_SYSTEMS = {
     "age-of-fantasy-regiments": {"id": 6, "code": "AOFR", "name": "Age of Fantasy: Regiments"},
 }
 
+SKIRMISH_GAME_SYSTEM_SLUGS = {
+    "grimdark-future-firefight",
+    "age-of-fantasy-skirmish",
+}
+
 
 def normalize_text(value: str) -> str:
     replacements = {
@@ -116,6 +121,73 @@ def count_rule_occurrences(units: list[dict[str, Any]]) -> dict[str, int]:
                 continue
             counts[name] = counts.get(name, 0) + 1
     return counts
+
+
+def has_rule(unit: dict[str, Any], *rule_names: str) -> bool:
+    target_names = {name.lower() for name in rule_names}
+    for rule in unit.get("rules", []):
+        name = str(rule.get("name") or "").strip().lower()
+        if name in target_names:
+            return True
+    return False
+
+
+def get_rule_rating(unit: dict[str, Any], rule_name: str) -> int | None:
+    normalized_rule_name = rule_name.lower()
+    for rule in unit.get("rules", []):
+        name = str(rule.get("name") or "").strip().lower()
+        if name != normalized_rule_name:
+            continue
+        rating = rule.get("rating")
+        if rating in {None, ""}:
+            return None
+        try:
+            return int(rating)
+        except (TypeError, ValueError):
+            match = re.search(r"\d+", str(rating))
+            if match:
+                return int(match.group(0))
+            return None
+    return None
+
+
+def is_narrative_unit(unit: dict[str, Any]) -> bool:
+    if unit.get("isNarrative") is True:
+        return True
+
+    unit_type = str(unit.get("type") or "").strip().lower()
+    if unit_type == "narrativehero":
+        return True
+
+    raw_unit_type = str(unit.get("unitType") or "").strip().lower()
+    return raw_unit_type == "narrative heroes"
+
+
+def classify_unit_type(unit: dict[str, Any], game_system_slug: str) -> str:
+    is_quest = "quest" in game_system_slug.lower()
+    is_skirmish = game_system_slug.lower() in SKIRMISH_GAME_SYSTEM_SLUGS
+    size = int(unit.get("size") or 0)
+
+    tough_rating = get_rule_rating(unit, "Tough")
+    adjusted_tough = (tough_rating / 3) if (tough_rating is not None and is_quest) else tough_rating
+
+    if has_rule(unit, "Hero") and is_narrative_unit(unit):
+        return "Héro Narratif"
+    if has_rule(unit, "Hero"):
+        return "Héro"
+    if is_skirmish:
+        return "Unité de base"
+    if has_rule(unit, "Aircraft"):
+        return "Aéronef"
+    if has_rule(unit, "Entrenched", "Artillery", "Mobile Artillery"):
+        return "Artillerie"
+    if adjusted_tough is not None and size == 1 and adjusted_tough >= 18:
+        return "Titan"
+    if adjusted_tough is not None and size == 1 and adjusted_tough >= 9:
+        return "Véhicule / Monstre"
+    if adjusted_tough is not None and size == 1 and adjusted_tough >= 6:
+        return "Véhicule léger / Petit monstre"
+    return "Unité de base"
 
 
 def format_special_rule_label(rule: dict[str, Any]) -> str:
@@ -217,7 +289,11 @@ def build_upgrades(unit: dict[str, Any], package_by_uid: dict[str, dict[str, Any
     return groups
 
 
-def build_unit(unit: dict[str, Any], package_by_uid: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def build_unit(
+    unit: dict[str, Any],
+    package_by_uid: dict[str, dict[str, Any]],
+    game_system_slug: str,
+) -> dict[str, Any]:
     rules = list(unit.get("rules", []))
     special_rules = [format_special_rule_label(rule) for rule in rules if rule.get("name")]
     tough = next((re.search(r"\(([^)]+)\)", label).group(1) for label in special_rules if re.search(r"^Tough\(([^)]+)\)$", label)), "")
@@ -231,20 +307,18 @@ def build_unit(unit: dict[str, Any], package_by_uid: dict[str, dict[str, Any]]) 
         "quality": f'{unit.get("quality", "")}+',
         "defense": f'{unit.get("defense", "")}+',
         "tough": tough,
+        "unitType": classify_unit_type(unit, game_system_slug),
         "specialRules": special_rules,
         "weapons": [format_weapon(weapon) for weapon in unit.get("weapons", [])],
         "upgrades": build_upgrades(unit, package_by_uid),
     }
 
-    unit_type = normalize_text(unit.get("unitType", ""))
-    if unit_type:
-        result["unitType"] = unit_type
-
     return result
 
 
 def extract_army_book_to_data(source_url: str, source: dict[str, Any]) -> dict[str, Any]:
-    game_system = GAME_SYSTEMS.get(str(source.get("gameSystemSlug") or ""), {})
+    game_system_slug = str(source.get("gameSystemSlug") or "")
+    game_system = GAME_SYSTEMS.get(game_system_slug, {})
     system_code = str(source.get("aberration") or source.get("gameSystemKey") or game_system.get("code") or "")
     system_name = str(game_system.get("name") or source.get("gameSystemSlug") or "")
 
@@ -302,7 +376,7 @@ def extract_army_book_to_data(source_url: str, source: dict[str, Any]) -> dict[s
             }
             for spell in source.get("spells", [])
         ],
-        "units": [build_unit(unit, package_by_uid) for unit in source.get("units", [])],
+        "units": [build_unit(unit, package_by_uid, game_system_slug) for unit in source.get("units", [])],
     }
 
 
