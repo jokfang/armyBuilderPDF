@@ -1,3 +1,5 @@
 __pycache__/
 generated/*
 !generated/.gitkeep
+logs/*
+!logs/.gitkeep

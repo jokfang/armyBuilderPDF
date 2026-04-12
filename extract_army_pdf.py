@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 import unicodedata
@@ -14,6 +15,13 @@ try:
     from pypdf import PdfReader
 except ImportError as error:
     raise SystemExit("Missing dependency: install pypdf with `python -m pip install pypdf`.") from error
+
+from logging_utils import (
+    LOG_FILE_PATH,
+    MISSING_TRANSLATIONS_LOG_FILE_PATH,
+    get_or_create_file_logger,
+    setup_script_logging,
+)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -45,6 +53,7 @@ PRICED_OPTION_RE = re.compile(r"^(?P<text>.+?) (?P<cost>(?:\+\d+pts)|Free)$")
 SPELL_RE = re.compile(r"^(?P<name>.+?) \((?P<cost>\d+)\): (?P<description>.+)$")
 TS_STRING_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
 DEFAULT_DICTIONARY_SOURCE = "https://raw.githubusercontent.com/jokfang/Johammer.github.io/refs/heads/main/public/locales/rules/common-rules.dictionary.ts"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,6 +70,7 @@ class TranslationEntry:
 
 @dataclass
 class TranslationDictionary:
+    source: str
     rules: dict[str, TranslationEntry]
     spells: dict[str, TranslationEntry]
     factions: dict[tuple[str, str], dict[str, str]]
@@ -411,19 +421,23 @@ def strip_translation_markup(value: str) -> str:
 
 def read_dictionary_source(dictionary_source: str | Path) -> str:
     if isinstance(dictionary_source, Path):
+        logger.info("Loading translation dictionary from local path: %s", dictionary_source)
         return dictionary_source.read_text(encoding="utf-8")
 
     source = str(dictionary_source).strip()
     if source.startswith(("http://", "https://")):
+        logger.info("Loading translation dictionary from URL: %s", source)
         with urllib.request.urlopen(source) as response:
             return response.read().decode("utf-8")
 
+    logger.info("Loading translation dictionary from path string: %s", source)
     return Path(source).read_text(encoding="utf-8")
 
 
 def load_translation_dictionary(dictionary_source: str | Path, language: str) -> TranslationDictionary:
     content = read_dictionary_source(dictionary_source)
     return TranslationDictionary(
+        source=str(dictionary_source),
         rules=parse_translation_entries(content, "commonRules", language),
         spells=parse_translation_entries(content, "commonSpells", language),
         factions=parse_faction_entries(content, language),
@@ -444,26 +458,64 @@ def translate_rule_name(value: str, title_map: dict[str, str]) -> str:
     return value
 
 
+def should_log_missing_translation(translations: TranslationDictionary) -> bool:
+    return str(translations.source).strip() == DEFAULT_DICTIONARY_SOURCE
+
+
+def log_missing_translation(message: str, *args: Any) -> None:
+    missing_logger = get_or_create_file_logger("missing_translations", MISSING_TRANSLATIONS_LOG_FILE_PATH)
+    missing_logger.info(message, *args)
+
+
 def apply_translations(data: dict[str, Any], translations: TranslationDictionary) -> dict[str, Any]:
     title_map = {
         **{key: entry.title for key, entry in translations.rules.items()},
         **{key: entry.title for key, entry in translations.spells.items()},
     }
     system_code = str(data.get("systemCode", ""))
-    faction_translation = translations.factions.get((system_code.upper(), str(data.get("armyName", ""))))
+    army_name = str(data.get("armyName", ""))
+    source_url = str(data.get("sourceUrl", "")).strip() or str(data.get("sourcePdf", "")).strip() or translations.source
+    faction_translation = translations.factions.get((system_code.upper(), army_name))
+    log_missing = should_log_missing_translation(translations)
 
     if faction_translation:
         for field_name in ("armyName", "introduction", "backgroundStory"):
             translated_value = faction_translation.get(field_name, "")
             if translated_value:
                 data[field_name] = strip_translation_markup(translated_value)
+            elif log_missing:
+                log_missing_translation(
+                    "Missing faction field translation: system=%s army=%s field=%s sourceUrl=%s",
+                    system_code.upper(),
+                    army_name,
+                    field_name,
+                    source_url,
+                )
+    elif log_missing:
+        log_missing_translation(
+            "Missing faction translation entry: system=%s army=%s sourceUrl=%s",
+            system_code.upper(),
+            army_name,
+            source_url,
+        )
 
-    def translate_rules_section(items: list[dict[str, Any]]) -> None:
+    def translate_rules_section(items: list[dict[str, Any]], section_name: str) -> None:
         for item in items:
             source_name = str(item.get("name", ""))
+            source_description = str(item.get("description", "")).strip()
             item["keywords"] = [source_name] if source_name else []
             translation = translations.rules.get(source_name)
             if not translation:
+                if log_missing and source_name:
+                    log_missing_translation(
+                        "Missing rule translation: system=%s army=%s section=%s rule=%s englishDescription=%s sourceUrl=%s",
+                        system_code.upper(),
+                        army_name,
+                        section_name,
+                        source_name,
+                        source_description,
+                        source_url,
+                    )
                 continue
             item["name"] = strip_translation_markup(translation.title)
             description = pick_translation_description(translation.descriptions, system_code)
@@ -471,13 +523,33 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
                 item.pop("description", None)
             elif item.get("description"):
                 item["description"] = strip_translation_markup(str(item.get("description", "")))
+            elif log_missing:
+                log_missing_translation(
+                    "Missing rule description translation: system=%s army=%s section=%s rule=%s englishDescription=%s sourceUrl=%s",
+                    system_code.upper(),
+                    army_name,
+                    section_name,
+                    source_name,
+                    source_description,
+                    source_url,
+                )
 
     def translate_spells_section(items: list[dict[str, Any]]) -> None:
         for item in items:
             source_name = str(item.get("name", ""))
+            source_description = str(item.get("description", "")).strip()
             item["keywords"] = [source_name] if source_name else []
             translation = translations.spells.get(source_name)
             if not translation:
+                if log_missing and source_name:
+                    log_missing_translation(
+                        "Missing spell translation: system=%s army=%s spell=%s englishDescription=%s sourceUrl=%s",
+                        system_code.upper(),
+                        army_name,
+                        source_name,
+                        source_description,
+                        source_url,
+                    )
                 continue
             item["name"] = strip_translation_markup(translation.title)
             description = pick_translation_description(translation.descriptions, system_code)
@@ -485,10 +557,19 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
                 item.pop("description", None)
             elif item.get("description"):
                 item["description"] = strip_translation_markup(str(item.get("description", "")))
+            elif log_missing:
+                log_missing_translation(
+                    "Missing spell description translation: system=%s army=%s spell=%s englishDescription=%s sourceUrl=%s",
+                    system_code.upper(),
+                    army_name,
+                    source_name,
+                    source_description,
+                    source_url,
+                )
 
-    translate_rules_section(data.get("armyWideSpecialRule", []))
-    translate_rules_section(data.get("specialRules", []))
-    translate_rules_section(data.get("auraSpecialRules", []))
+    translate_rules_section(data.get("armyWideSpecialRule", []), "armyWideSpecialRule")
+    translate_rules_section(data.get("specialRules", []), "specialRules")
+    translate_rules_section(data.get("auraSpecialRules", []), "auraSpecialRules")
     translate_spells_section(data.get("armySpells", []))
 
     for unit in data.get("units", []):
@@ -677,6 +758,7 @@ def parse_pdf(pdf_path: Path) -> dict[str, Any]:
 
 
 def main() -> None:
+    cli_logger = setup_script_logging("extract_army_pdf")
     parser = argparse.ArgumentParser(description="Extract an OPR army PDF into a JSON data file.")
     parser.add_argument("pdf", type=Path, help="Path to the PDF to extract.")
     parser.add_argument("-o", "--output", type=Path, help="Path to write JSON output.")
@@ -691,17 +773,31 @@ def main() -> None:
         help="Path or URL to the common rules dictionary file.",
     )
     args = parser.parse_args()
+    cli_logger.info(
+        "Starting PDF extraction: pdf=%s output=%s language=%s",
+        args.pdf,
+        args.output,
+        args.language,
+    )
 
-    data = parse_pdf(args.pdf)
-    translations = load_translation_dictionary(args.dictionary, args.language.lower())
-    data = apply_translations(data, translations)
-    output = json.dumps(data, ensure_ascii=False, indent=2)
+    try:
+        data = parse_pdf(args.pdf)
+        translations = load_translation_dictionary(args.dictionary, args.language.lower())
+        data = apply_translations(data, translations)
+        output = json.dumps(data, ensure_ascii=False, indent=2)
 
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(f"{output}\n", encoding="utf-8")
-    else:
-        print(output)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(f"{output}\n", encoding="utf-8")
+            cli_logger.info("Wrote extracted JSON to %s", args.output)
+        else:
+            cli_logger.info("Printed extracted JSON to stdout")
+            print(output)
+
+        cli_logger.info("PDF extraction completed successfully. Log file: %s", LOG_FILE_PATH)
+    except Exception:
+        cli_logger.exception("PDF extraction failed for pdf=%s", args.pdf)
+        raise
 
 
 if __name__ == "__main__":

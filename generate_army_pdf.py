@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from extract_army_pdf import (
     pick_translation_description,
     strip_translation_markup,
 )
+from logging_utils import LOG_FILE_PATH, setup_script_logging
 
 
 PAGE_WIDTH = 595.92
@@ -64,6 +66,7 @@ UNTYPED_UNIT_GROUP_LABEL = "Autres unités"
 COMMON_RULES_DICTIONARY_PATH = DEFAULT_DICTIONARY_SOURCE
 _TRANSLATION_CACHE: dict[str, Any] = {}
 PRINT_FRIENDLY_FILL = (0.0, 0.0, 0.0)
+logger = logging.getLogger(__name__)
 
 
 def pdf_text(value: Any) -> str:
@@ -264,6 +267,7 @@ class PdfBuilder:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(output)
+        logger.info("Wrote PDF file to %s", output_path)
 
 
 class Layout:
@@ -1102,6 +1106,12 @@ def draw_intro_page(layout: Layout, data: dict[str, Any]) -> None:
 
 
 def build_pdf(data: dict[str, Any], output_path: Path, *, print_friendly: bool = False) -> None:
+    logger.info(
+        "Building PDF: output_path=%s army=%s print_friendly=%s",
+        output_path,
+        data.get("armyName", ""),
+        print_friendly,
+    )
     data = {**data, "__print_friendly": print_friendly}
     pdf = PdfBuilder(format_header(data))
     layout = Layout(pdf)
@@ -1135,6 +1145,7 @@ def resolve_cli_paths(input_path: Path, output_path: Path | None) -> tuple[Path,
 
 
 def main() -> None:
+    cli_logger = setup_script_logging("generate_army_pdf")
     parser = argparse.ArgumentParser(description="Generate an OPR-style army PDF from an extracted JSON file.")
     parser.add_argument(
         "input",
@@ -1148,13 +1159,25 @@ def main() -> None:
         help="Generate a print-friendly PDF without faction colors or unit-type group separators.",
     )
     args = parser.parse_args()
+    cli_logger.info(
+        "Starting single PDF generation: input=%s output=%s print_friendly=%s",
+        args.input,
+        args.output,
+        args.print_friendly,
+    )
 
-    json_path, output_path = resolve_cli_paths(args.input, args.output)
-    if not json_path.exists():
-        raise SystemExit(f"JSON input not found: {json_path}")
+    try:
+        json_path, output_path = resolve_cli_paths(args.input, args.output)
+        if not json_path.exists():
+            cli_logger.error("JSON input not found: %s", json_path)
+            raise SystemExit(f"JSON input not found: {json_path}")
 
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    build_pdf(data, output_path, print_friendly=args.print_friendly)
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        build_pdf(data, output_path, print_friendly=args.print_friendly)
+        cli_logger.info("Single PDF generation completed successfully. Log file: %s", LOG_FILE_PATH)
+    except Exception:
+        cli_logger.exception("Single PDF generation failed for input=%s", args.input)
+        raise
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import unicodedata
 import urllib.parse
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from extract_army_pdf import apply_translations, load_translation_dictionary
+from logging_utils import LOG_FILE_PATH, setup_script_logging
 
 
 GAME_SYSTEMS = {
@@ -24,6 +26,7 @@ SKIRMISH_GAME_SYSTEM_SLUGS = {
     "grimdark-future-firefight",
     "age-of-fantasy-skirmish",
 }
+logger = logging.getLogger(__name__)
 
 
 def normalize_text(value: str) -> str:
@@ -101,6 +104,7 @@ def fetch_army_book(parsed_url: dict[str, Any]) -> dict[str, Any]:
         f"{host}/api/army-books/{parsed_url['bookUid']}?"
         f"gameSystem={parsed_url['gameSystemId']}&simpleMode=false"
     )
+    logger.info("Fetching army book from API: %s", api_url)
     request = urllib.request.Request(
         api_url,
         headers={
@@ -152,15 +156,7 @@ def get_rule_rating(unit: dict[str, Any], rule_name: str) -> int | None:
 
 
 def is_narrative_unit(unit: dict[str, Any]) -> bool:
-    if unit.get("isNarrative") is True:
-        return True
-
-    unit_type = str(unit.get("type") or "").strip().lower()
-    if unit_type == "narrativehero":
-        return True
-
-    raw_unit_type = str(unit.get("unitType") or "").strip().lower()
-    return raw_unit_type == "narrative heroes"
+    return has_rule(unit, "Hero") and has_rule(unit, "Unique")
 
 
 def classify_unit_type(unit: dict[str, Any], game_system_slug: str) -> str:
@@ -171,7 +167,7 @@ def classify_unit_type(unit: dict[str, Any], game_system_slug: str) -> str:
     tough_rating = get_rule_rating(unit, "Tough")
     adjusted_tough = (tough_rating / 3) if (tough_rating is not None and is_quest) else tough_rating
 
-    if has_rule(unit, "Hero") and is_narrative_unit(unit):
+    if is_narrative_unit(unit):
         return "Héro Narratif"
     if has_rule(unit, "Hero"):
         return "Héro"
@@ -394,15 +390,19 @@ def extract_from_url(
     language: str = "fr",
     dictionary_path: Path = Path("public/locales/rules/common-rules.dictionary.ts"),
 ) -> tuple[dict[str, Any], str]:
+    logger.info("Extracting army book from URL: %s", url)
     parsed_url = parse_army_book_url(url)
     source = fetch_army_book(parsed_url)
     data = extract_army_book_to_data(url, source)
     translations = load_translation_dictionary(dictionary_path, language.lower())
     data = apply_translations(data, translations)
-    return data, make_output_basename(data)
+    basename = make_output_basename(data)
+    logger.info("Built extracted JSON payload for %s with basename %s", url, basename)
+    return data, basename
 
 
 def main() -> None:
+    cli_logger = setup_script_logging("extract_army_web")
     parser = argparse.ArgumentParser(description="Extract an OPR Army Forge army-info URL into a JSON data file.")
     parser.add_argument("url", help="Army Forge army-info URL.")
     parser.add_argument("-o", "--output", type=Path, help="Path to write JSON output.")
@@ -418,13 +418,25 @@ def main() -> None:
         help="Path to the common rules dictionary file.",
     )
     args = parser.parse_args()
+    cli_logger.info(
+        "Starting web extraction: url=%s output=%s language=%s",
+        args.url,
+        args.output,
+        args.language,
+    )
 
-    data, basename = extract_from_url(args.url, language=args.language, dictionary_path=args.dictionary)
-    output_path = args.output or Path("ArmyForgeFR/src/data/generated") / f"{basename}.json"
-    output = json.dumps(data, ensure_ascii=False, indent=2)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(f"{output}\n", encoding="utf-8")
-    print(output_path.as_posix())
+    try:
+        data, basename = extract_from_url(args.url, language=args.language, dictionary_path=args.dictionary)
+        output_path = args.output or Path("ArmyForgeFR/src/data/generated") / f"{basename}.json"
+        output = json.dumps(data, ensure_ascii=False, indent=2)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(f"{output}\n", encoding="utf-8")
+        cli_logger.info("Wrote extracted JSON to %s", output_path)
+        cli_logger.info("Web extraction completed successfully. Log file: %s", LOG_FILE_PATH)
+        print(output_path.as_posix())
+    except Exception:
+        cli_logger.exception("Web extraction failed for url=%s", args.url)
+        raise
 
 
 if __name__ == "__main__":
