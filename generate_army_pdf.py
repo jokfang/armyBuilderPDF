@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -531,9 +532,14 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
             layout.y = PAGE_HEIGHT - MARGIN_TOP - 18
             y_values[:] = [layout.y for _ in range(column_count)]
 
-    army_wide_rules = list(data.get("armyWideSpecialRule", []))
-    special_rules = list(data.get("specialRules", []))
-    aura_rules = list(data.get("auraSpecialRules", []))
+    def rule_sort_key(item: dict[str, Any]) -> str:
+        name = str(item.get("name", "")).strip()
+        normalized = unicodedata.normalize("NFKD", name)
+        return "".join(char for char in normalized if not unicodedata.combining(char)).casefold()
+
+    army_wide_rules = sorted(list(data.get("armyWideSpecialRule", [])), key=rule_sort_key)
+    special_rules = sorted(list(data.get("specialRules", [])), key=rule_sort_key)
+    aura_rules = sorted(list(data.get("auraSpecialRules", [])), key=rule_sort_key)
 
     army_wide_height = block_height([(LABELS["army_wide_special_rule"].upper(), heading_style)], extra_gap=2.0) if army_wide_rules else 0.0
     army_wide_height += sum(block_height(build_item_block(item, col_width)) for item in army_wide_rules)
