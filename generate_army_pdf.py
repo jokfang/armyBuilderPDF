@@ -147,6 +147,16 @@ def wrap_text(value: str, max_width: float, font_size: float) -> list[str]:
     return wrapped
 
 
+def normalize_sort_text(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in normalized if not unicodedata.combining(char)).casefold()
+
+
+def sorted_rule_names(rule_names: list[Any]) -> list[str]:
+    return sorted((str(rule).strip() for rule in rule_names if str(rule).strip()), key=normalize_sort_text)
+
+
 @dataclass
 class TextStyle:
     font: str = "F1"
@@ -466,7 +476,7 @@ def draw_summary_page(layout: Layout, data: dict[str, Any]) -> None:
             last_group_label = group_label
 
         equipment = weapon_summary(unit.get("weapons", []))
-        rules = ", ".join(unit.get("specialRules", []))
+        rules = ", ".join(sorted_rule_names(unit.get("specialRules", [])))
         name = f"{unit.get('name')} [{unit.get('size')}]"
         draw_table_row([
             name,
@@ -508,22 +518,24 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
             y_values[col] -= style.leading
         y_values[col] -= extra_gap
 
-    def draw_section_in_column(col: int, heading: str, items: list[dict[str, Any]]) -> None:
+    def draw_section_in_column(col: int, heading: str, items: list[dict[str, Any]], *, show_heading: bool = True) -> None:
         if not items:
             return
-        draw_lines_in_column(col, [(heading.upper(), heading_style)], extra_gap=2.0)
+        if show_heading:
+            draw_lines_in_column(col, [(heading.upper(), heading_style)], extra_gap=2.0)
         for item in items:
             draw_lines_in_column(col, build_item_block(item, col_width))
 
-    def ensure_top_section_fit(columns: list[list[tuple[str, list[dict[str, Any]]]]]) -> None:
+    def ensure_top_section_fit(columns: list[list[tuple[str, list[dict[str, Any]], bool]]]) -> None:
         nonlocal y_values
         estimated_heights: list[float] = []
         for column_sections in columns:
             total = 0.0
-            for heading, items in column_sections:
+            for heading, items, show_heading in column_sections:
                 if not items:
                     continue
-                total += block_height([(heading.upper(), heading_style)], extra_gap=2.0)
+                if show_heading:
+                    total += block_height([(heading.upper(), heading_style)], extra_gap=2.0)
                 for item in items:
                     total += block_height(build_item_block(item, col_width))
             estimated_heights.append(total)
@@ -533,9 +545,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
             y_values[:] = [layout.y for _ in range(column_count)]
 
     def rule_sort_key(item: dict[str, Any]) -> str:
-        name = str(item.get("name", "")).strip()
-        normalized = unicodedata.normalize("NFKD", name)
-        return "".join(char for char in normalized if not unicodedata.combining(char)).casefold()
+        return normalize_sort_text(item.get("name", ""))
 
     army_wide_rules = sorted(list(data.get("armyWideSpecialRule", [])), key=rule_sort_key)
     special_rules = sorted(list(data.get("specialRules", [])), key=rule_sort_key)
@@ -564,20 +574,20 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
             running_height += special_rule_heights[index]
 
     left_column_sections = [
-        (LABELS["army_wide_special_rule"], army_wide_rules),
-        (LABELS["special_rules"], special_rules[:split_index]),
+        (LABELS["army_wide_special_rule"], army_wide_rules, True),
+        (LABELS["special_rules"], special_rules[:split_index], True),
     ]
     center_column_sections = [
-        (LABELS["special_rules"], special_rules[split_index:]),
+        (LABELS["special_rules"], special_rules[split_index:], split_index == 0),
     ]
     right_column_sections = [
-        (LABELS["aura_special_rules"], aura_rules),
+        (LABELS["aura_special_rules"], aura_rules, True),
     ]
 
     ensure_top_section_fit([left_column_sections, center_column_sections, right_column_sections])
     draw_section_in_column(0, LABELS["army_wide_special_rule"], army_wide_rules)
     draw_section_in_column(0, LABELS["special_rules"], special_rules[:split_index])
-    draw_section_in_column(1, LABELS["special_rules"], special_rules[split_index:])
+    draw_section_in_column(1, LABELS["special_rules"], special_rules[split_index:], show_heading=split_index == 0)
     draw_section_in_column(2, LABELS["aura_special_rules"], aura_rules)
 
     layout.y = min(y_values) - 2.0
@@ -726,7 +736,10 @@ def unit_block_lines(unit: dict[str, Any], max_width: float) -> list[tuple[str, 
     if unit.get("tough"):
         stats += f" {LABELS['tough']} {unit.get('tough')}"
     lines.append((stats, TextStyle("F2", 7.4, 8.5)))
-    lines.extend((line, TextStyle("F1", 7.2, 8.3)) for line in wrap_text(", ".join(unit.get("specialRules", [])), max_width, 7.2))
+    lines.extend(
+        (line, TextStyle("F1", 7.2, 8.3))
+        for line in wrap_text(", ".join(sorted_rule_names(unit.get("specialRules", []))), max_width, 7.2)
+    )
     lines.append((f"Weapon RNG {LABELS['atk']} {LABELS['ap']} SPE", TextStyle("F2", 7.0, 8.2)))
 
     for weapon in unit.get("weapons", []):
@@ -756,7 +769,7 @@ def unit_card_layout(unit: dict[str, Any], width: float) -> list[dict[str, Any]]
         {"kind": "stats", "height": 10.0},
     ]
 
-    rules = ", ".join(unit.get("specialRules", []))
+    rules = ", ".join(sorted_rule_names(unit.get("specialRules", [])))
     rule_lines = wrap_text(rules, inner_width, 6.7) if rules else []
     if rule_lines:
         layout.append({"kind": "rules", "lines": rule_lines, "height": len(rule_lines) * 7.4 + 3})
