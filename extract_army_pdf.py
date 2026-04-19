@@ -6,6 +6,7 @@ import logging
 import re
 import sys
 import unicodedata
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +53,11 @@ UPGRADE_HEADING_RE = re.compile(r"^(Upgrade|Replace)\b")
 PRICED_OPTION_RE = re.compile(r"^(?P<text>.+?) (?P<cost>(?:\+\d+pts)|Free)$")
 SPELL_RE = re.compile(r"^(?P<name>.+?) \((?P<cost>\d+)\): (?P<description>.+)$")
 TS_STRING_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
-DEFAULT_DICTIONARY_SOURCE = "https://raw.githubusercontent.com/jokfang/Johammer.github.io/refs/heads/main/public/locales/rules/common-rules.dictionary.ts"
+DEFAULT_DICTIONARY_SOURCE = "https://johammer.netlify.app/api/dictionary"
+FALLBACK_DICTIONARY_SOURCE = (
+    "https://raw.githubusercontent.com/jokfang/Johammer.github.io/refs/heads/main/public/locales/rules/common-rules.dictionary.ts"
+)
+DICTIONARY_REQUEST_TIMEOUT_SECONDS = 10
 logger = logging.getLogger(__name__)
 
 
@@ -419,25 +424,62 @@ def strip_translation_markup(value: str) -> str:
     return normalize_text(cleaned).strip()
 
 
-def read_dictionary_source(dictionary_source: str | Path) -> str:
+def extract_dictionary_payload(raw_content: str, source: str) -> str:
+    stripped = raw_content.lstrip("\ufeff").strip()
+    if stripped.startswith("export const "):
+        return raw_content
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return raw_content
+
+    if isinstance(payload, str) and payload.strip():
+        return payload
+
+    if isinstance(payload, dict):
+        for key in ("content", "dictionary", "raw", "source", "ts", "typescript"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+
+    raise ValueError(f"Unsupported dictionary response format from {source}.")
+
+
+def fetch_dictionary_url(source: str) -> tuple[str, str]:
+    logger.info("Loading translation dictionary from URL: %s", source)
+    with urllib.request.urlopen(source, timeout=DICTIONARY_REQUEST_TIMEOUT_SECONDS) as response:
+        content = response.read().decode("utf-8")
+    return extract_dictionary_payload(content, source), source
+
+
+def read_dictionary_source(dictionary_source: str | Path) -> tuple[str, str]:
     if isinstance(dictionary_source, Path):
         logger.info("Loading translation dictionary from local path: %s", dictionary_source)
-        return dictionary_source.read_text(encoding="utf-8")
+        return dictionary_source.read_text(encoding="utf-8"), str(dictionary_source)
 
     source = str(dictionary_source).strip()
     if source.startswith(("http://", "https://")):
-        logger.info("Loading translation dictionary from URL: %s", source)
-        with urllib.request.urlopen(source) as response:
-            return response.read().decode("utf-8")
+        if source == DEFAULT_DICTIONARY_SOURCE:
+            try:
+                return fetch_dictionary_url(source)
+            except (urllib.error.URLError, TimeoutError, ValueError) as error:
+                logger.warning(
+                    "Primary dictionary source unavailable or invalid (%s). Falling back to legacy source: %s",
+                    error,
+                    FALLBACK_DICTIONARY_SOURCE,
+                )
+                return fetch_dictionary_url(FALLBACK_DICTIONARY_SOURCE)
+        return fetch_dictionary_url(source)
 
     logger.info("Loading translation dictionary from path string: %s", source)
-    return Path(source).read_text(encoding="utf-8")
+    return Path(source).read_text(encoding="utf-8"), source
 
 
 def load_translation_dictionary(dictionary_source: str | Path, language: str) -> TranslationDictionary:
-    content = read_dictionary_source(dictionary_source)
+    content, resolved_source = read_dictionary_source(dictionary_source)
     return TranslationDictionary(
-        source=str(dictionary_source),
+        source=resolved_source,
         rules=parse_translation_entries(content, "commonRules", language),
         spells=parse_translation_entries(content, "commonSpells", language),
         factions=parse_faction_entries(content, language),
@@ -459,7 +501,7 @@ def translate_rule_name(value: str, title_map: dict[str, str]) -> str:
 
 
 def should_log_missing_translation(translations: TranslationDictionary) -> bool:
-    return str(translations.source).strip() == DEFAULT_DICTIONARY_SOURCE
+    return str(translations.source).strip() in {DEFAULT_DICTIONARY_SOURCE, FALLBACK_DICTIONARY_SOURCE}
 
 
 def log_missing_translation(message: str, *args: Any) -> None:

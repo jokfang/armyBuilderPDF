@@ -492,19 +492,21 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
     layout.page = layout.pdf.new_page()
     layout.y = PAGE_HEIGHT - MARGIN_TOP - 18
     column_count = 3
-    col_gap = 12.0
+    col_gap = 16.0
     col_width = (PAGE_WIDTH - 2 * MARGIN_X - col_gap * (column_count - 1)) / column_count
     x_values = [MARGIN_X + index * (col_width + col_gap) for index in range(column_count)]
     y_values = [layout.y for _ in range(column_count)]
     heading_style = TextStyle("F2", 8.2, 9.4)
     title_style = TextStyle("F2", 7.1, 8.1)
     body_style = TextStyle("F1", 6.8, 7.7)
+    text_inset = 2.0
+    text_width_safe = max(col_width - text_inset * 2, 24.0)
     section_fill = get_section_fill(data)
     spells = list(data.get("armySpells", []))
 
     def build_item_block(item: dict[str, Any], width: float, *, is_spell: bool = False) -> list[tuple[str, TextStyle]]:
         title = f"{item.get('name')} ({item.get('cost')}):" if "cost" in item else f"{item.get('name')}:"
-        lines = [(title, title_style)]
+        lines = [(line, title_style) for line in wrap_text(title, width, title_style.size)]
         body_lines = wrap_text(resolve_section_item_description(item, data, is_spell=is_spell), width, body_style.size)
         lines.extend((line, body_style) for line in body_lines)
         return lines
@@ -514,7 +516,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
 
     def draw_lines_in_column(col: int, lines: list[tuple[str, TextStyle]], extra_gap: float = 3.0) -> None:
         for line, style in lines:
-            layout.page.text(x_values[col], y_values[col], line, style)
+            layout.page.text(x_values[col] + text_inset, y_values[col], line, style)
             y_values[col] -= style.leading
         y_values[col] -= extra_gap
 
@@ -524,7 +526,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
         if show_heading:
             draw_lines_in_column(col, [(heading.upper(), heading_style)], extra_gap=2.0)
         for item in items:
-            draw_lines_in_column(col, build_item_block(item, col_width))
+            draw_lines_in_column(col, build_item_block(item, text_width_safe))
 
     def ensure_top_section_fit(columns: list[list[tuple[str, list[dict[str, Any]], bool]]]) -> None:
         nonlocal y_values
@@ -537,7 +539,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
                 if show_heading:
                     total += block_height([(heading.upper(), heading_style)], extra_gap=2.0)
                 for item in items:
-                    total += block_height(build_item_block(item, col_width))
+                    total += block_height(build_item_block(item, text_width_safe))
             estimated_heights.append(total)
         if estimated_heights and layout.y - max(estimated_heights) < MARGIN_BOTTOM:
             layout.page = layout.pdf.new_page()
@@ -552,8 +554,8 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
     aura_rules = sorted(list(data.get("auraSpecialRules", [])), key=rule_sort_key)
 
     army_wide_height = block_height([(LABELS["army_wide_special_rule"].upper(), heading_style)], extra_gap=2.0) if army_wide_rules else 0.0
-    army_wide_height += sum(block_height(build_item_block(item, col_width)) for item in army_wide_rules)
-    special_rule_heights = [block_height(build_item_block(item, col_width)) for item in special_rules]
+    army_wide_height += sum(block_height(build_item_block(item, text_width_safe)) for item in army_wide_rules)
+    special_rule_heights = [block_height(build_item_block(item, text_width_safe)) for item in special_rules]
     total_special_height = sum(special_rule_heights)
 
     split_index = len(special_rules)
@@ -604,14 +606,15 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
     layout.y -= 6.0
 
     spell_column_count = 3
-    spell_col_gap = 12.0
+    spell_col_gap = 16.0
     spell_col_width = (PAGE_WIDTH - 2 * MARGIN_X - spell_col_gap * (spell_column_count - 1)) / spell_column_count
     spell_x_values = [MARGIN_X + index * (spell_col_width + spell_col_gap) for index in range(spell_column_count)]
     spell_y_values = [layout.y for _ in range(spell_column_count)]
     spell_col = 0
+    spell_text_width_safe = max(spell_col_width - text_inset * 2, 24.0)
 
     for spell in spells:
-        lines = build_item_block(spell, spell_col_width, is_spell=True)
+        lines = build_item_block(spell, spell_text_width_safe, is_spell=True)
         height = block_height(lines)
         if spell_y_values[spell_col] - height < MARGIN_BOTTOM:
             spell_col = 1 if spell_col < spell_column_count - 1 else 0
@@ -626,7 +629,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
                 spell_col = 0
 
         for line, style in lines:
-            layout.page.text(spell_x_values[spell_col], spell_y_values[spell_col], line, style)
+            layout.page.text(spell_x_values[spell_col] + text_inset, spell_y_values[spell_col], line, style)
             spell_y_values[spell_col] -= style.leading
         spell_y_values[spell_col] -= 3.0
         spell_col = (spell_col + 1) % spell_column_count
