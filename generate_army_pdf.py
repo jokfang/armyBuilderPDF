@@ -157,6 +157,21 @@ def sorted_rule_names(rule_names: list[Any]) -> list[str]:
     return sorted((str(rule).strip() for rule in rule_names if str(rule).strip()), key=normalize_sort_text)
 
 
+def original_rule_name(item: dict[str, Any]) -> str:
+    keywords = [str(keyword).strip() for keyword in item.get("keywords", []) if str(keyword).strip()]
+    return keywords[0] if keywords else str(item.get("name", "")).strip()
+
+
+def display_rule_title(item: dict[str, Any]) -> str:
+    translated_name = str(item.get("name", "")).strip()
+    source_name = original_rule_name(item)
+    if not translated_name:
+        return source_name
+    if source_name:
+        return f"{translated_name} ({source_name})"
+    return translated_name
+
+
 @dataclass
 class TextStyle:
     font: str = "F1"
@@ -505,7 +520,8 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
     spells = list(data.get("armySpells", []))
 
     def build_item_block(item: dict[str, Any], width: float, *, is_spell: bool = False) -> list[tuple[str, TextStyle]]:
-        title = f"{item.get('name')} ({item.get('cost')}):" if "cost" in item else f"{item.get('name')}:"
+        name = display_rule_title(item) if not is_spell else str(item.get("name", "")).strip()
+        title = f"{name} ({item.get('cost')}):" if "cost" in item else f"{name}:"
         lines = [(line, title_style) for line in wrap_text(title, width, title_style.size)]
         body_lines = wrap_text(resolve_section_item_description(item, data, is_spell=is_spell), width, body_style.size)
         lines.extend((line, body_style) for line in body_lines)
@@ -547,7 +563,7 @@ def draw_rule_pages(layout: Layout, data: dict[str, Any]) -> None:
             y_values[:] = [layout.y for _ in range(column_count)]
 
     def rule_sort_key(item: dict[str, Any]) -> str:
-        return normalize_sort_text(item.get("name", ""))
+        return normalize_sort_text(original_rule_name(item))
 
     army_wide_rules = sorted(list(data.get("armyWideSpecialRule", [])), key=rule_sort_key)
     special_rules = sorted(list(data.get("specialRules", [])), key=rule_sort_key)

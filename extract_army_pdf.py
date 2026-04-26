@@ -418,6 +418,68 @@ def parse_faction_entries(content: str, language: str) -> dict[tuple[str, str], 
     return entries
 
 
+def parse_json_description_map(entry: dict[str, Any]) -> dict[str, str]:
+    descriptions: dict[str, str] = {}
+
+    for item in entry.get("description") or []:
+        if not isinstance(item, dict):
+            continue
+        system = str(item.get("system", "")).lower()
+        text = item.get("text")
+        if system and isinstance(text, str):
+            descriptions[system] = text
+
+    return descriptions
+
+
+def parse_json_translation_entries(payload: dict[str, Any], section_name: str, language: str) -> dict[str, TranslationEntry]:
+    section = payload.get(section_name)
+    if not isinstance(section, dict):
+        return {}
+
+    language_entries = section.get(language)
+    if not isinstance(language_entries, dict):
+        return {}
+
+    entries: dict[str, TranslationEntry] = {}
+    for key, entry in language_entries.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            continue
+        title = entry.get("title")
+        if not isinstance(title, str):
+            continue
+        entries[key] = TranslationEntry(title=title, descriptions=parse_json_description_map(entry))
+
+    return entries
+
+
+def parse_json_faction_entries(payload: dict[str, Any], language: str) -> dict[tuple[str, str], dict[str, str]]:
+    faction_data = payload.get("factionData")
+    if not isinstance(faction_data, dict):
+        return {}
+
+    source_entries = faction_data.get("en")
+    translated_entries = faction_data.get(language)
+    if not isinstance(source_entries, list) or not isinstance(translated_entries, list):
+        return {}
+
+    entries: dict[tuple[str, str], dict[str, str]] = {}
+    for source_entry, translated_entry in zip(source_entries, translated_entries):
+        if not isinstance(source_entry, dict) or not isinstance(translated_entry, dict):
+            continue
+        system_code = str(source_entry.get("systemCode", "")).upper()
+        army_name = str(source_entry.get("armyName", ""))
+        if not system_code or not army_name:
+            continue
+        entries[(system_code, army_name)] = {
+            "armyName": str(translated_entry.get("armyName", "")),
+            "introduction": str(translated_entry.get("introduction", "")),
+            "backgroundStory": str(translated_entry.get("backgroundStory", "")),
+        }
+
+    return entries
+
+
 def strip_translation_markup(value: str) -> str:
     cleaned = value.replace("<key>", "").replace("</key>", "")
     cleaned = cleaned.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"').replace("â€", '"')
@@ -438,6 +500,9 @@ def extract_dictionary_payload(raw_content: str, source: str) -> str:
         return payload
 
     if isinstance(payload, dict):
+        if isinstance(payload.get("commonRules"), dict) or isinstance(payload.get("commonSpells"), dict):
+            return stripped
+
         for key in ("content", "dictionary", "raw", "source", "ts", "typescript"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
@@ -476,14 +541,82 @@ def read_dictionary_source(dictionary_source: str | Path) -> tuple[str, str]:
     return Path(source).read_text(encoding="utf-8"), source
 
 
-def load_translation_dictionary(dictionary_source: str | Path, language: str) -> TranslationDictionary:
-    content, resolved_source = read_dictionary_source(dictionary_source)
+def parse_translation_dictionary_content(content: str, resolved_source: str, language: str) -> TranslationDictionary:
+    stripped_content = content.lstrip("\ufeff").strip()
+    if stripped_content.startswith("{"):
+        payload = json.loads(stripped_content)
+        if isinstance(payload, dict):
+            return TranslationDictionary(
+                source=resolved_source,
+                rules=parse_json_translation_entries(payload, "commonRules", language),
+                spells=parse_json_translation_entries(payload, "commonSpells", language),
+                factions=parse_json_faction_entries(payload, language),
+            )
+
     return TranslationDictionary(
         source=resolved_source,
         rules=parse_translation_entries(content, "commonRules", language),
         spells=parse_translation_entries(content, "commonSpells", language),
         factions=parse_faction_entries(content, language),
     )
+
+
+def merge_translation_dictionaries(primary: TranslationDictionary, fallback: TranslationDictionary) -> TranslationDictionary:
+    rules = dict(primary.rules)
+    for key, fallback_entry in fallback.rules.items():
+        primary_entry = rules.get(key)
+        if primary_entry is None:
+            rules[key] = fallback_entry
+            continue
+        rules[key] = TranslationEntry(
+            title=primary_entry.title or fallback_entry.title,
+            descriptions={**fallback_entry.descriptions, **primary_entry.descriptions},
+        )
+
+    spells = dict(primary.spells)
+    for key, fallback_entry in fallback.spells.items():
+        primary_entry = spells.get(key)
+        if primary_entry is None:
+            spells[key] = fallback_entry
+            continue
+        spells[key] = TranslationEntry(
+            title=primary_entry.title or fallback_entry.title,
+            descriptions={**fallback_entry.descriptions, **primary_entry.descriptions},
+        )
+
+    factions = dict(primary.factions)
+    for key, fallback_entry in fallback.factions.items():
+        primary_entry = factions.get(key)
+        if primary_entry is None:
+            factions[key] = fallback_entry
+            continue
+        factions[key] = {
+            "armyName": primary_entry.get("armyName") or fallback_entry.get("armyName", ""),
+            "introduction": primary_entry.get("introduction") or fallback_entry.get("introduction", ""),
+            "backgroundStory": primary_entry.get("backgroundStory") or fallback_entry.get("backgroundStory", ""),
+        }
+
+    return TranslationDictionary(
+        source=primary.source,
+        rules=rules,
+        spells=spells,
+        factions=factions,
+    )
+
+
+def load_translation_dictionary(dictionary_source: str | Path, language: str) -> TranslationDictionary:
+    content, resolved_source = read_dictionary_source(dictionary_source)
+    translations = parse_translation_dictionary_content(content, resolved_source, language)
+
+    if str(dictionary_source).strip() == DEFAULT_DICTIONARY_SOURCE and resolved_source == DEFAULT_DICTIONARY_SOURCE:
+        try:
+            fallback_content, fallback_source = fetch_dictionary_url(FALLBACK_DICTIONARY_SOURCE)
+            fallback_translations = parse_translation_dictionary_content(fallback_content, fallback_source, language)
+            translations = merge_translation_dictionaries(translations, fallback_translations)
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as error:
+            logger.warning("Legacy dictionary fallback unavailable or invalid: %s", error)
+
+    return translations
 
 
 def pick_translation_description(descriptions: dict[str, str], system_code: str) -> str:
