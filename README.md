@@ -62,7 +62,7 @@ Cette commande utilise par défaut :
 ## Syntaxe complète
 
 ```powershell
-python .\build_army_books_from_urls.py [list_path] [--output-dir DOSSIER] [--language LANGUE] [--dictionary CHEMIN_OU_URL] [--print-friendly]
+python .\build_army_books_from_urls.py [list_path] [--output-dir DOSSIER] [--language LANGUE] [--dictionary CHEMIN_OU_URL] [--print-friendly] [--core-rules-pdf-list FICHIER] [--skip-core-special-rules]
 ```
 
 ## Options
@@ -133,12 +133,34 @@ Exemple :
 python .\build_army_books_from_urls.py --print-friendly
 ```
 
+### `--core-rules-pdf-list`
+
+Configure les PDF de règles de base utilisés pour générer un PDF de règles spéciales par système.
+
+Le fichier par défaut est `core-rules-pdf.txt`. Chaque ligne contient un code système puis une URL :
+
+```text
+AOF https://example.com/aof-core-rules.pdf
+GF https://example.com/gf-core-rules.pdf
+```
+
+Le script garde les 2 premières pages du PDF core, puis ajoute toutes les règles spéciales du système.
+
+### `--skip-core-special-rules`
+
+Désactive la génération des PDF globaux de règles spéciales.
+
 ## Fichiers générés
 
 Le script crée deux fichiers par army book dans le dossier de sortie :
 
 - `*.json`
 - `*.pdf`
+
+Il crée aussi, sauf avec `--skip-core-special-rules`, un PDF de règles spéciales par système configuré :
+
+- `aof-core-special-rules.pdf`
+- `gf-core-special-rules.pdf`
 
 Le nom du fichier est construit à partir :
 
@@ -289,7 +311,7 @@ Solutions :
 - ou passer un chemin explicite :
 
 ```powershell
-python .\build_army_books_from_urls.py .\mon-fichier.txt
+python .\build_army_books_from_urls.py .\army-book-urls.txt
 ```
 
 ### `Missing dependency: install pypdf`

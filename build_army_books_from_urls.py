@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from core_special_rules_pdf import DEFAULT_CORE_RULES_PDF_LIST, build_system_special_rules_pdfs
 from extract_army_pdf import DEFAULT_DICTIONARY_SOURCE
 from extract_army_web import extract_from_url
 from generate_army_pdf import build_pdf
@@ -52,6 +53,17 @@ def main() -> None:
         "--print-friendly",
         action="store_true",
         help="Generate print-friendly PDFs without faction colors or unit-type group separators.",
+    )
+    parser.add_argument(
+        "--core-rules-pdf-list",
+        type=Path,
+        default=DEFAULT_CORE_RULES_PDF_LIST,
+        help="Path to the system core rules PDF URL config used to build special-rules PDFs.",
+    )
+    parser.add_argument(
+        "--skip-core-special-rules",
+        action="store_true",
+        help="Skip generating one core special-rules PDF per configured system.",
     )
     args = parser.parse_args()
     logger.info(
@@ -105,6 +117,22 @@ def main() -> None:
             print(f"- {failed_url}")
             print(f"  {message}")
         raise SystemExit(1)
+
+    if not args.skip_core_special_rules:
+        try:
+            logger.info("Generating system special-rules PDFs from %s", args.core_rules_pdf_list)
+            generated_paths = build_system_special_rules_pdfs(
+                args.output_dir,
+                config_path=args.core_rules_pdf_list,
+                dictionary_source=args.dictionary,
+                language=args.language,
+                print_friendly=args.print_friendly,
+            )
+            for generated_path in generated_paths:
+                print(f"Generated {generated_path.as_posix()}")
+        except Exception as error:
+            logger.exception("Failed to generate system special-rules PDFs")
+            raise SystemExit(f"Failed to generate system special-rules PDFs: {type(error).__name__}: {error}") from error
 
     logger.info("Batch build completed successfully. Log file: %s", LOG_FILE_PATH)
 

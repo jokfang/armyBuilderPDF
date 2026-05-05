@@ -165,11 +165,11 @@ def original_rule_name(item: dict[str, Any]) -> str:
 def display_rule_title(item: dict[str, Any]) -> str:
     translated_name = str(item.get("name", "")).strip()
     source_name = original_rule_name(item)
-    if not translated_name:
+    if not source_name:
+        return translated_name
+    if not translated_name or translated_name == source_name:
         return source_name
-    if source_name:
-        return f"{translated_name} ({source_name})"
-    return translated_name
+    return f"{source_name} [ {translated_name} ]"
 
 
 @dataclass
@@ -1159,6 +1159,23 @@ def build_pdf(data: dict[str, Any], output_path: Path, *, print_friendly: bool =
     draw_summary_page(layout, data)
     draw_rule_pages(layout, data)
     draw_units(layout, data)
+
+    pdf.write_pdf(output_path)
+
+
+def build_rules_pdf(data: dict[str, Any], output_path: Path, *, print_friendly: bool = False) -> None:
+    logger.info(
+        "Building rules PDF: output_path=%s system=%s print_friendly=%s",
+        output_path,
+        data.get("systemCode", ""),
+        print_friendly,
+    )
+    data = {**data, "__print_friendly": print_friendly}
+    pdf = PdfBuilder(format_header(data))
+    pdf.pages.clear()
+    layout = Layout(pdf)
+
+    draw_rule_pages(layout, data)
 
     pdf.write_pdf(output_path)
 

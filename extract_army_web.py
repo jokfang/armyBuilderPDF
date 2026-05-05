@@ -188,11 +188,14 @@ def classify_unit_type(unit: dict[str, Any], game_system_slug: str) -> str:
 
 def format_special_rule_label(rule: dict[str, Any]) -> str:
     label = str(rule.get("label") or rule.get("name") or "").strip()
-    if label:
-        return normalize_text(label)
-
     name = str(rule.get("name") or "").strip()
     rating = rule.get("rating")
+    if label:
+        normalized_label = normalize_text(label)
+        if rating in {None, ""} or re.search(r"\([^()]+\)\s*$", normalized_label):
+            return normalized_label
+        return normalize_text(f"{normalized_label}({rating})")
+
     if rating in {None, ""}:
         return normalize_text(name)
     return normalize_text(f"{name}({rating})")

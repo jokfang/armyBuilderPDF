@@ -1,0 +1,3 @@
+# One system per line: SYSTEM_CODE URL
+AOF https://cdn.prod.website-files.com/636c3b6dcdb4eb2dce722889/69f26a1eb5543d1169761835_AoF%20Core%20rules%20v3.5.1%20-%20Franc%CC%A7ais.pdf
+GF https://cdn.prod.website-files.com/636c3b6dcdb4eb2dce722889/6944613cbc4518525f609c84_GF%20-%20Core%20Rules%20-%20V3.5%20-%20FR.pdf
