@@ -23,6 +23,7 @@ from logging_utils import (
     get_or_create_file_logger,
     setup_script_logging,
 )
+from typography_utils import normalize_bracket_spacing
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -114,6 +115,7 @@ def normalize_text(value: str) -> str:
     normalized = normalized.replace("\uFFFD", "")
     normalized = normalized.replace("ﬁ", "fi").replace("ﬂ", "fl").replace("ﬀ", "ff")
     normalized = normalized.replace("ARMY-W IDE", "ARMY-WIDE")
+    normalized = normalize_bracket_spacing(normalized)
     return normalized
 
 
@@ -627,9 +629,112 @@ def pick_translation_description(descriptions: dict[str, str], system_code: str)
 def translate_rule_name(value: str, title_map: dict[str, str]) -> str:
     for source, target in sorted(title_map.items(), key=lambda item: len(item[0]), reverse=True):
         pattern = re.compile(
-            rf"(?<![A-Za-z]){re.escape(source)}(?P<suffix>\([^()]+\))?(?![A-Za-z])"
+            rf"(?<![A-Za-z]){re.escape(source)}(?P<suffix>\s*\([^()]+\))?(?![A-Za-z])"
         )
         value = pattern.sub(lambda match: f"{target}{match.group('suffix') or ''}", value)
+    return normalize_bracket_spacing(value)
+
+
+def translate_upgrade_group_type(value: str) -> str:
+    normalized = " ".join(str(value or "").split())
+    if not normalized:
+        return ""
+
+    def translate_targets(targets: str) -> str:
+        return targets.replace(" and ", " et ")
+
+    def strip_prefix(prefix: str) -> str:
+        return normalized[len(prefix) :].strip()
+
+    replacements = [
+        ("Replace all ", "Remplace tous les "),
+        ("Replace any ", "Remplace n'importe quel "),
+        ("Replace one ", "Remplace un "),
+        ("Replace up to two ", "Remplace jusqu\u2019\u00e0 deux "),
+        ("Replace up to three ", "Remplace jusqu\u2019\u00e0 trois "),
+        ("Replace ", "Remplace "),
+    ]
+    for prefix, translated_prefix in replacements:
+        if normalized.startswith(prefix):
+            return translated_prefix + translate_targets(strip_prefix(prefix))
+
+    take_prefix = "Take one upgrade "
+    if normalized.startswith(take_prefix):
+        return "Prend un accessoire " + translate_targets(strip_prefix(take_prefix))
+
+    def translate_upgrade_options(options: str) -> str:
+        option_prefixes = [
+            ("up to three ", "jusqu\u2019\u00e0 trois "),
+            ("up to two ", "jusqu\u2019\u00e0 deux "),
+            ("any ", "n'importe lequel "),
+            ("one ", "un "),
+        ]
+        for prefix, translated_prefix in option_prefixes:
+            if options.startswith(prefix):
+                return translated_prefix + translate_targets(options[len(prefix) :].strip())
+        return translate_targets(options)
+
+    equipment_upgrade_prefixes = [
+        ("Upgrade all ", "Am\u00e9liore tous les "),
+        ("Upgrade any ", "Am\u00e9liore n'importe quel "),
+        ("Upgrade one ", "Am\u00e9liore un "),
+        ("Upgrade ", "Am\u00e9liore "),
+    ]
+    for prefix, translated_prefix in equipment_upgrade_prefixes:
+        if normalized.startswith(prefix) and " with " in strip_prefix(prefix):
+            target, options = strip_prefix(prefix).split(" with ", 1)
+            if "model" in target.split() or "models" in target.split():
+                continue
+            return (
+                translated_prefix
+                + translate_targets(target.strip())
+                + " avec "
+                + translate_upgrade_options(options.strip())
+            ).strip()
+
+    upgrade_prefixes = [
+        ("Upgrade all models with one", "Am\u00e9liore toutes les figurines avec un"),
+        ("Upgrade all models with any", "Am\u00e9liore toutes les figurines avec n'importe lequel"),
+        ("Upgrade all models with", "Am\u00e9liore toutes les figurines avec"),
+        ("Upgrade any model with one", "Am\u00e9liore n'importe quelle figurine avec un"),
+        ("Upgrade any model with", "Am\u00e9liore n'importe quelle figurine avec"),
+        ("Upgrade one model with one", "Am\u00e9liore une figurine avec un"),
+        ("Upgrade one model with any", "Am\u00e9liore une figurine avec n'importe lequel"),
+        ("Upgrade one model with", "Am\u00e9liore une figurine avec"),
+        ("Upgrade up to two models with one", "Am\u00e9liore jusqu\u2019\u00e0 deux figurines avec un"),
+        ("Upgrade up to two models with", "Am\u00e9liore jusqu\u2019\u00e0 deux figurines avec"),
+        ("Upgrade up to three models with one", "Am\u00e9liore jusqu\u2019\u00e0 trois figurines avec un"),
+        ("Upgrade all ", "Am\u00e9liore tous les "),
+        ("Upgrade any ", "Am\u00e9liore n'importe quel "),
+        ("Upgrade one ", "Am\u00e9liore un "),
+        ("Upgrade with up to two", "Am\u00e9liore avec jusqu\u2019\u00e0 deux"),
+        ("Upgrade with up to three", "Am\u00e9liore avec jusqu\u2019\u00e0 trois"),
+        ("Upgrade with any", "Am\u00e9liore avec n'importe lequel"),
+        ("Upgrade with one", "Am\u00e9liore avec un"),
+        ("Upgrade with", "Am\u00e9liore avec"),
+        ("Upgrade ", "Am\u00e9liore "),
+    ]
+    for prefix, translated_prefix in upgrade_prefixes:
+        if normalized == prefix:
+            return translated_prefix
+        if normalized.startswith(prefix + " "):
+            return translated_prefix + " " + translate_targets(strip_prefix(prefix))
+
+    model_actions = [
+        ("Any model may replace two ", "N'importe quelle figurine peut remplacer deux "),
+        ("Any model may replace one ", "N'importe quelle figurine peut remplacer un "),
+        ("Any model may replace ", "N'importe quelle figurine peut remplacer "),
+        ("Any model may take one upgrade ", "N'importe quelle figurine peut prendre un accessoire "),
+        ("Any model may take one ", "N'importe quelle figurine peut prendre un "),
+        ("One model may replace one ", "Une figurine peut remplacer un "),
+        ("One model may replace ", "Une figurine peut remplacer "),
+        ("One model may take one upgrade ", "Une figurine peut prendre un accessoire "),
+        ("One model may take one ", "Une figurine peut prendre un "),
+    ]
+    for prefix, translated_prefix in model_actions:
+        if normalized.startswith(prefix):
+            return translated_prefix + translate_targets(strip_prefix(prefix))
+
     return value
 
 
@@ -674,7 +779,7 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
             source_url,
         )
 
-    def translate_rules_section(items: list[dict[str, Any]], section_name: str) -> None:
+    def translate_rules_section(items: list[dict[str, Any]], section_name: str, *, keep_description: bool = False) -> None:
         for item in items:
             source_name = str(item.get("name", ""))
             source_description = str(item.get("description", "")).strip()
@@ -695,7 +800,10 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
             item["name"] = strip_translation_markup(translation.title)
             description = pick_translation_description(translation.descriptions, system_code)
             if description:
-                item.pop("description", None)
+                if keep_description:
+                    item["description"] = strip_translation_markup(description)
+                else:
+                    item.pop("description", None)
             elif item.get("description"):
                 item["description"] = strip_translation_markup(str(item.get("description", "")))
             elif log_missing:
@@ -729,7 +837,7 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
             item["name"] = strip_translation_markup(translation.title)
             description = pick_translation_description(translation.descriptions, system_code)
             if description:
-                item.pop("description", None)
+                item["description"] = strip_translation_markup(description)
             elif item.get("description"):
                 item["description"] = strip_translation_markup(str(item.get("description", "")))
             elif log_missing:
@@ -742,7 +850,7 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
                     source_url,
                 )
 
-    translate_rules_section(data.get("armyWideSpecialRule", []), "armyWideSpecialRule")
+    translate_rules_section(data.get("armyWideSpecialRule", []), "armyWideSpecialRule", keep_description=True)
     translate_rules_section(data.get("specialRules", []), "specialRules")
     translate_rules_section(data.get("auraSpecialRules", []), "auraSpecialRules")
     translate_spells_section(data.get("armySpells", []))
@@ -752,6 +860,7 @@ def apply_translations(data: dict[str, Any], translations: TranslationDictionary
         for weapon in unit.get("weapons", []):
             weapon["special"] = strip_translation_markup(translate_rule_name(weapon.get("special", ""), title_map))
         for upgrade in unit.get("upgrades", []):
+            upgrade["type"] = strip_translation_markup(translate_upgrade_group_type(upgrade.get("type", "")))
             for option in upgrade.get("options", []):
                 option["details"] = strip_translation_markup(translate_rule_name(option.get("details", ""), title_map))
 

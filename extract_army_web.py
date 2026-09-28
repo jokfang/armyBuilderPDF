@@ -12,6 +12,7 @@ from typing import Any
 
 from extract_army_pdf import apply_translations, load_translation_dictionary
 from logging_utils import LOG_FILE_PATH, setup_script_logging
+from typography_utils import normalize_bracket_spacing
 
 
 GAME_SYSTEMS = {
@@ -56,6 +57,7 @@ def normalize_text(value: str) -> str:
             normalized = normalized.encode("latin-1").decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
+    normalized = normalize_bracket_spacing(normalized)
     normalized = re.sub(r"(\r\n|\r|\n){3,}", "\n\n", normalized)
     return normalized.strip()
 
@@ -98,12 +100,16 @@ def parse_army_book_url(url: str) -> dict[str, Any]:
     }
 
 
-def fetch_army_book(parsed_url: dict[str, Any]) -> dict[str, Any]:
+def build_army_book_api_url(parsed_url: dict[str, Any]) -> str:
     host = "https://army-forge-beta.onepagerules.com" if parsed_url["isBeta"] else "https://army-forge.onepagerules.com"
-    api_url = (
+    return (
         f"{host}/api/army-books/{parsed_url['bookUid']}?"
         f"gameSystem={parsed_url['gameSystemId']}&simpleMode=false"
     )
+
+
+def fetch_army_book(parsed_url: dict[str, Any]) -> dict[str, Any]:
+    api_url = build_army_book_api_url(parsed_url)
     logger.info("Fetching army book from API: %s", api_url)
     request = urllib.request.Request(
         api_url,
@@ -192,19 +198,19 @@ def format_special_rule_label(rule: dict[str, Any]) -> str:
     rating = rule.get("rating")
     if label:
         normalized_label = normalize_text(label)
-        if rating in {None, ""} or re.search(r"\([^()]+\)\s*$", normalized_label):
+        if rating in {None, ""} or re.search(r"\(\s*[^()]+\s*\)\s*$", normalized_label):
             return normalized_label
-        return normalize_text(f"{normalized_label}({rating})")
+        return normalize_text(f"{normalized_label} ({rating})")
 
     if rating in {None, ""}:
         return normalize_text(name)
-    return normalize_text(f"{name}({rating})")
+    return normalize_text(f"{name} ({rating})")
 
 
 def format_ap(rules: list[dict[str, Any]]) -> str:
     for rule in rules:
         if rule.get("name") == "AP":
-            match = re.search(r"\(([^)]+)\)", format_special_rule_label(rule))
+            match = re.search(r"\(\s*([^)]+?)\s*\)", format_special_rule_label(rule))
             return match.group(1) if match else str(rule.get("rating") or "-")
     return "-"
 
@@ -214,11 +220,18 @@ def format_rule_list(rules: list[dict[str, Any]]) -> str:
     return ", ".join(label for label in labels if label) or "-"
 
 
-def format_weapon(weapon: dict[str, Any]) -> dict[str, str]:
+def format_weapon(weapon: dict[str, Any], unit_size: int) -> dict[str, str]:
     weapon_rules = list(weapon.get("specialRules", []))
     range_value = weapon.get("range")
+    name = normalize_text(weapon.get("name", ""))
+    weapon_count = int(weapon.get("count") or 1)
+    if unit_size > 0 and weapon_count % unit_size == 0:
+        count_per_model = weapon_count // unit_size
+        if count_per_model > 1:
+            name = f"{count_per_model}x {name}"
+
     return {
-        "name": normalize_text(weapon.get("name", "")),
+        "name": name,
         "range": f'{range_value}"' if isinstance(range_value, (int, float)) and range_value > 0 else "-",
         "attacks": f'A{weapon.get("attacks", 0)}',
         "ap": format_ap(weapon_rules),
@@ -241,7 +254,7 @@ def format_gain_details(gain: dict[str, Any]) -> str:
             parts.insert(0, f'{range_value}"')
         ap = format_ap(list(gain.get("specialRules", [])))
         if ap != "-":
-            parts.append(f"AP({ap})")
+            parts.append(f"AP ({ap})")
         other_rules = format_rule_list(list(gain.get("specialRules", [])))
         if other_rules != "-":
             parts.append(other_rules)
@@ -254,29 +267,61 @@ def format_gain_details(gain: dict[str, Any]) -> str:
     return normalize_text(gain.get("label") or gain.get("name") or "")
 
 
-def format_option(option: dict[str, Any]) -> dict[str, str]:
-    gains = list(option.get("gains", []))
-    first_gain = gains[0] if gains else {}
-    raw_cost = option.get("cost")
+def order_gains_by_label(gains: list[dict[str, Any]], label: str) -> list[tuple[int, dict[str, Any]]]:
+    normalized_label = normalize_text(label)
+
+    def gain_index(gain: dict[str, Any]) -> int:
+        name = normalize_text(gain.get("name", ""))
+        index = normalized_label.find(name)
+        return index if index >= 0 else len(normalized_label)
+
+    return sorted(enumerate(gains), key=lambda item: (gain_index(item[1]), item[0]))
+
+
+def format_option_cost(option: dict[str, Any], unit_uid: str) -> str:
+    raw_cost: Any = None
+    for cost_entry in option.get("costs", []) or []:
+        if str(cost_entry.get("unitId") or "") == unit_uid:
+            raw_cost = cost_entry.get("cost")
+            break
+
     if raw_cost in {None, ""}:
-        costs = option.get("costs", [])
-        raw_cost = costs[0]["cost"] if costs else 0
+        raw_cost = option.get("cost")
+
+    if raw_cost in {None, "", 0}:
+        return "Free"
+
+    try:
+        numeric_cost = int(raw_cost)
+    except (TypeError, ValueError):
+        text = normalize_text(str(raw_cost))
+        return text if text.startswith(("+", "-")) else f"+{text}pts"
+
+    sign = "+" if numeric_cost > 0 else ""
+    return f"{sign}{numeric_cost}pts"
+
+
+def format_option(option: dict[str, Any], unit_uid: str) -> dict[str, str]:
+    gains = list(option.get("gains", []))
+    ordered_gains = [gain for _, gain in order_gains_by_label(gains, str(option.get("label", "")))]
+    fallback_label = normalize_text(option.get("label", ""))
 
     return {
-        "name": format_gain_name(first_gain) if first_gain else normalize_text(option.get("label", "")),
-        "details": format_gain_details(first_gain) if first_gain else normalize_text(option.get("label", "")),
-        "cost": "Free" if not raw_cost else f"+{raw_cost}pts",
+        "name": ", ".join(format_gain_name(gain) for gain in ordered_gains) if ordered_gains else fallback_label,
+        "details": "; ".join(format_gain_details(gain) for gain in ordered_gains) if ordered_gains else fallback_label,
+        "cost": format_option_cost(option, unit_uid),
     }
 
 
 def build_upgrades(unit: dict[str, Any], package_by_uid: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
+    unit_id = str(unit.get("id") or unit.get("uid") or "")
     for package_uid in unit.get("upgrades", []):
         package = package_by_uid.get(package_uid)
         if package is None:
             continue
         for section in package.get("sections", []):
-            options = [format_option(option) for option in section.get("options", [])]
+            options = [format_option(option, unit_id) for option in section.get("options", [])]
             if not options:
                 continue
             groups.append(
@@ -295,7 +340,14 @@ def build_unit(
 ) -> dict[str, Any]:
     rules = list(unit.get("rules", []))
     special_rules = [format_special_rule_label(rule) for rule in rules if rule.get("name")]
-    tough = next((re.search(r"\(([^)]+)\)", label).group(1) for label in special_rules if re.search(r"^Tough\(([^)]+)\)$", label)), "")
+    tough = next(
+        (
+            re.search(r"\(\s*([^)]+?)\s*\)", label).group(1)
+            for label in special_rules
+            if re.search(r"^Tough\s*\(\s*([^)]+?)\s*\)$", label)
+        ),
+        "",
+    )
     unique_hero = any(rule.get("name") == "Hero" for rule in rules) and any(rule.get("name") == "Unique" for rule in rules)
     result = {
         "name": normalize_text(unit.get("name", "")),
@@ -308,14 +360,15 @@ def build_unit(
         "tough": tough,
         "unitType": classify_unit_type(unit, game_system_slug),
         "specialRules": special_rules,
-        "weapons": [format_weapon(weapon) for weapon in unit.get("weapons", [])],
+        "weapons": [format_weapon(weapon, int(unit.get("size") or 0)) for weapon in unit.get("weapons", [])],
+        "items": list(unit.get("items", [])),
         "upgrades": build_upgrades(unit, package_by_uid),
     }
 
     return result
 
 
-def extract_army_book_to_data(source_url: str, source: dict[str, Any]) -> dict[str, Any]:
+def extract_army_book_to_data(source_url: str, source: dict[str, Any], source_api_url: str = "") -> dict[str, Any]:
     game_system_slug = str(source.get("gameSystemSlug") or "")
     game_system = GAME_SYSTEMS.get(game_system_slug, {})
     system_code = str(source.get("aberration") or source.get("gameSystemKey") or game_system.get("code") or "")
@@ -336,6 +389,7 @@ def extract_army_book_to_data(source_url: str, source: dict[str, Any]) -> dict[s
     return {
         "sourcePdf": source_url,
         "sourceUrl": source_url,
+        "sourceApiUrl": source_api_url,
         "sourceBookUid": source.get("uid", ""),
         "systemCode": system_code,
         "systemName": system_name,
@@ -396,7 +450,7 @@ def extract_from_url(
     logger.info("Extracting army book from URL: %s", url)
     parsed_url = parse_army_book_url(url)
     source = fetch_army_book(parsed_url)
-    data = extract_army_book_to_data(url, source)
+    data = extract_army_book_to_data(url, source, build_army_book_api_url(parsed_url))
     translations = load_translation_dictionary(dictionary_path, language.lower())
     data = apply_translations(data, translations)
     basename = make_output_basename(data)

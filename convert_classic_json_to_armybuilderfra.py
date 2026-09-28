@@ -93,7 +93,7 @@ def parse_cost_string(value: Any) -> int:
 
 def parse_coriace_from_rules(rule_names: list[Any]) -> int:
     for rule_name in rule_names:
-        match = re.match(r"^Coriace\((\d+)\)$", normalize_text(rule_name))
+        match = re.match(r"^Coriace\s*\(\s*(\d+)\s*\)$", normalize_text(rule_name))
         if match:
             return int(match.group(1))
     return 0
@@ -164,7 +164,7 @@ def looks_like_weapon_details(details: str) -> bool:
     tokens = split_csv_details(details)
     return any(
         token.startswith("A")
-        or token.startswith("PA(")
+        or re.match(r"^PA\s*\(", token)
         or token.endswith('"')
         for token in tokens
     )
@@ -226,7 +226,7 @@ def parse_weapon_details_to_classic(name: str, details: str) -> dict[str, Any]:
         if re.match(r"^A\d+$", token):
             attacks = parse_numeric_string(token)
             continue
-        if re.match(r"^PA\(\d+\)$", token):
+        if re.match(r"^PA\s*\(\s*\d+\s*\)$", token):
             armor_piercing = parse_numeric_string(token)
             continue
         special_rules.append(token)
@@ -255,7 +255,7 @@ def parse_mount_details_to_classic(name: str, details: str) -> dict[str, Any]:
     in_weapon = False
 
     for token in tokens:
-        coriace_match = re.match(r"^Coriace\(\+?(\d+)\)$", token)
+        coriace_match = re.match(r"^Coriace\s*\(\s*\+?(\d+)\s*\)$", token)
         if coriace_match and not in_weapon:
             mount["coriace_bonus"] = int(coriace_match.group(1))
             continue
@@ -329,7 +329,7 @@ def convert_generated_unit_to_classic(unit: dict[str, Any]) -> dict[str, Any]:
     special_rules = [
         normalize_text(rule)
         for rule in unit.get("specialRules", [])
-        if normalize_text(rule) and not re.match(r"^Coriace\(\d+\)$", normalize_text(rule))
+        if normalize_text(rule) and not re.match(r"^Coriace\s*\(\s*\d+\s*\)$", normalize_text(rule))
     ]
     coriace = parse_numeric_string(unit.get("tough", "")) or parse_coriace_from_rules(unit.get("specialRules", []))
 

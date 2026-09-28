@@ -28,6 +28,7 @@ Le document racine est un objet JSON avec cette forme générale :
 {
   "sourcePdf": "https://army-forge.onepagerules.com/army-info/age-of-fantasy/BOOK_UID",
   "sourceUrl": "https://army-forge.onepagerules.com/army-info/age-of-fantasy/BOOK_UID",
+  "sourceApiUrl": "https://army-forge.onepagerules.com/api/army-books/BOOK_UID?gameSystem=4&simpleMode=false",
   "sourceBookUid": "BOOK_UID",
   "systemCode": "AOF",
   "systemName": "Age of Fantasy",
@@ -61,6 +62,18 @@ Exemple :
 
 ```text
 https://army-forge.onepagerules.com/army-info/age-of-fantasy/TciwNI3AOMXAM-dr?armyName=Beastmen
+```
+
+### `sourceApiUrl`
+
+Type : `string`
+
+URL API Army Forge utilisée pour récupérer les données brutes du livre d'armée.
+
+Exemple :
+
+```text
+https://army-forge.onepagerules.com/api/army-books/TciwNI3AOMXAM-dr?gameSystem=4&simpleMode=false
 ```
 
 ### `sourceBookUid`
@@ -235,7 +248,7 @@ Type : `string`
 
 Description du sort.
 
-Comme pour les règles, ce champ peut être absent si la description est reconstruite à partir du dictionnaire de traduction.
+Après application des traductions, ce champ contient la description française du sort.
 
 #### `keywords`
 
@@ -533,6 +546,7 @@ Exemples :
 {
   "sourcePdf": "https://army-forge.onepagerules.com/army-info/age-of-fantasy/TciwNI3AOMXAM-dr?armyName=Beastmen",
   "sourceUrl": "https://army-forge.onepagerules.com/army-info/age-of-fantasy/TciwNI3AOMXAM-dr?armyName=Beastmen",
+  "sourceApiUrl": "https://army-forge.onepagerules.com/api/army-books/TciwNI3AOMXAM-dr?gameSystem=4&simpleMode=false",
   "sourceBookUid": "TciwNI3AOMXAM-dr",
   "systemCode": "AOF",
   "systemName": "Age of Fantasy",
@@ -604,16 +618,16 @@ Exemples :
 
 ## Notes importantes
 
-### Les descriptions peuvent être absentes
+### Les descriptions de règles peuvent être absentes
 
-Après traduction, certaines entrées de règles et de sorts conservent :
+Après traduction, certaines entrées de règles conservent :
 
 - `name`
 - `keywords`
 
 mais plus de champ `description`.
 
-C'est normal : le générateur PDF peut reconstruire la description depuis le dictionnaire à partir de `keywords`.
+Les entrées `armyWideSpecialRule` et `armySpells` conservent leur champ `description` en français.
 
 ### Certaines chaînes peuvent rester en anglais
 

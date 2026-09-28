@@ -15,8 +15,10 @@ from extract_army_pdf import (
     load_translation_dictionary,
     pick_translation_description,
     strip_translation_markup,
+    translate_upgrade_group_type,
 )
 from logging_utils import LOG_FILE_PATH, setup_script_logging
+from typography_utils import normalize_bracket_spacing
 
 
 PAGE_WIDTH = 595.92
@@ -71,7 +73,7 @@ logger = logging.getLogger(__name__)
 
 
 def pdf_text(value: Any) -> str:
-    encoded = str(value).encode("cp1252", errors="replace")
+    encoded = normalize_bracket_spacing(str(value)).encode("cp1252", errors="replace")
     escaped: list[str] = []
     for byte in encoded:
         char = chr(byte)
@@ -119,6 +121,7 @@ def get_section_fill(data: dict[str, Any]) -> tuple[float, float, float]:
 
 
 def text_width(value: str, font_size: float) -> float:
+    value = normalize_bracket_spacing(value)
     wide = sum(1 for char in value if char in "MW@#%&")
     narrow = sum(1 for char in value if char in " .,;:'!|ilIj")
     other = max(len(value) - wide - narrow, 0)
@@ -128,7 +131,7 @@ def text_width(value: str, font_size: float) -> float:
 def wrap_text(value: str, max_width: float, font_size: float) -> list[str]:
     wrapped: list[str] = []
 
-    for paragraph in str(value or "").splitlines() or [""]:
+    for paragraph in normalize_bracket_spacing(str(value or "")).splitlines() or [""]:
         words = paragraph.split()
         if not words:
             wrapped.append("")
@@ -154,7 +157,10 @@ def normalize_sort_text(value: Any) -> str:
 
 
 def sorted_rule_names(rule_names: list[Any]) -> list[str]:
-    return sorted((str(rule).strip() for rule in rule_names if str(rule).strip()), key=normalize_sort_text)
+    return sorted(
+        (normalize_bracket_spacing(str(rule)).strip() for rule in rule_names if str(rule).strip()),
+        key=normalize_sort_text,
+    )
 
 
 def original_rule_name(item: dict[str, Any]) -> str:
@@ -679,38 +685,7 @@ def upgrade_group_label(value: str) -> str:
     if value == "Upgrade SPE":
         return LABELS["upgrade_spe"]
 
-    normalized = " ".join(value.split())
-    lower = normalized.lower()
-    if lower == "upgrade all models with one":
-        return "Améliore toutes les figurines avec une option:"
-    if lower == "upgrade one model with one":
-        return "Améliore une figurine avec une option:"
-    exact_labels = {
-        "upgrade all models with any": "Améliore toutes les figurines avec une option:",
-        "upgrade with any": "Améliore avec une option:",
-        "upgrade with one": "Améliore avec une option:",
-        "upgrade up to three models with one": "Améliore jusqu'à trois figurines avec:",
-        "upgrade one model with": "Améliore une figurine avec:",
-        "upgrade all models with": "Améliore toutes les figurines avec:",
-        "upgrade all model with": "Améliore toutes les figurines avec:",
-        "upgrade with": "Améliore avec:",
-    }
-    if lower in exact_labels:
-        return exact_labels[lower]
-
-    def translate_replace_targets(targets: str) -> str:
-        return targets.replace(" and ", " et ")
-
-    if lower.startswith("replace all "):
-        return f"Remplace les {translate_replace_targets(normalized[len('Replace all '):])}"
-
-    if lower.startswith("replace any "):
-        return f"Remplace {translate_replace_targets(normalized[len('Replace any '):])}"
-
-    if lower.startswith("replace "):
-        return f"Remplace {translate_replace_targets(normalized[len('Replace '):])}"
-
-    return value
+    return translate_upgrade_group_type(value)
 
 
 def split_upgrade_spe_option(option: dict[str, Any]) -> tuple[str, str]:
