@@ -451,7 +451,11 @@ def extract_from_url(
     parsed_url = parse_army_book_url(url)
     source = fetch_army_book(parsed_url)
     data = extract_army_book_to_data(url, source, build_army_book_api_url(parsed_url))
-    translations = load_translation_dictionary(dictionary_path, language.lower())
+    translations = load_translation_dictionary(
+        dictionary_path,
+        language.lower(),
+        str(data.get("systemCode") or ""),
+    )
     data = apply_translations(data, translations)
     basename = make_output_basename(data)
     logger.info("Built extracted JSON payload for %s with basename %s", url, basename)

@@ -7,6 +7,7 @@ import re
 import sys
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -342,9 +343,10 @@ def parse_description_map(entry_block: str) -> dict[str, str]:
         text_match = re.search(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', item_block)
         if not system_match or not text_match:
             continue
-        system = parse_ts_string(system_match.group(1)).lower()
+        system = parse_ts_string(system_match.group(1))
         text = parse_ts_string(text_match.group(1))
-        descriptions[system] = text
+        for system_tag in split_system_tags(system):
+            descriptions[system_tag] = text
 
     return descriptions
 
@@ -426,10 +428,11 @@ def parse_json_description_map(entry: dict[str, Any]) -> dict[str, str]:
     for item in entry.get("description") or []:
         if not isinstance(item, dict):
             continue
-        system = str(item.get("system", "")).lower()
+        system = str(item.get("system", ""))
         text = item.get("text")
         if system and isinstance(text, str):
-            descriptions[system] = text
+            for system_tag in split_system_tags(system):
+                descriptions[system_tag] = text
 
     return descriptions
 
@@ -520,16 +523,49 @@ def fetch_dictionary_url(source: str) -> tuple[str, str]:
     return extract_dictionary_payload(content, source), source
 
 
-def read_dictionary_source(dictionary_source: str | Path) -> tuple[str, str]:
+def normalize_system_tag(value: str) -> str:
+    return str(value or "").strip().casefold()
+
+
+def split_system_tags(value: str) -> tuple[str, ...]:
+    return tuple(
+        tag
+        for raw_tag in str(value or "").split("/")
+        if (tag := normalize_system_tag(raw_tag))
+    )
+
+
+def add_dictionary_system_filter(source: str, system_code: str | None) -> str:
+    normalized_system = str(system_code or "").strip().upper()
+    if not normalized_system:
+        return source
+
+    parsed = urllib.parse.urlsplit(source)
+    query = [
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if key.casefold() != "system"
+    ]
+    query.append(("system", normalized_system))
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query), parsed.fragment)
+    )
+
+
+def read_dictionary_source(
+    dictionary_source: str | Path,
+    system_code: str | None = None,
+) -> tuple[str, str]:
     if isinstance(dictionary_source, Path):
         logger.info("Loading translation dictionary from local path: %s", dictionary_source)
         return dictionary_source.read_text(encoding="utf-8"), str(dictionary_source)
 
     source = str(dictionary_source).strip()
     if source.startswith(("http://", "https://")):
+        filtered_source = add_dictionary_system_filter(source, system_code)
         if source == DEFAULT_DICTIONARY_SOURCE:
             try:
-                return fetch_dictionary_url(source)
+                return fetch_dictionary_url(filtered_source)
             except (urllib.error.URLError, TimeoutError, ValueError) as error:
                 logger.warning(
                     "Primary dictionary source unavailable or invalid (%s). Falling back to legacy source: %s",
@@ -537,7 +573,7 @@ def read_dictionary_source(dictionary_source: str | Path) -> tuple[str, str]:
                     FALLBACK_DICTIONARY_SOURCE,
                 )
                 return fetch_dictionary_url(FALLBACK_DICTIONARY_SOURCE)
-        return fetch_dictionary_url(source)
+        return fetch_dictionary_url(filtered_source)
 
     logger.info("Loading translation dictionary from path string: %s", source)
     return Path(source).read_text(encoding="utf-8"), source
@@ -606,14 +642,48 @@ def merge_translation_dictionaries(primary: TranslationDictionary, fallback: Tra
     )
 
 
-def load_translation_dictionary(dictionary_source: str | Path, language: str) -> TranslationDictionary:
-    content, resolved_source = read_dictionary_source(dictionary_source)
-    translations = parse_translation_dictionary_content(content, resolved_source, language)
+def filter_translation_dictionary(
+    translations: TranslationDictionary,
+    system_code: str | None,
+) -> TranslationDictionary:
+    normalized_system = normalize_system_tag(system_code or "")
+    if not normalized_system:
+        return translations
 
-    if str(dictionary_source).strip() == DEFAULT_DICTIONARY_SOURCE and resolved_source == DEFAULT_DICTIONARY_SOURCE:
+    def matches(entry: TranslationEntry) -> bool:
+        return normalized_system in entry.descriptions
+
+    return TranslationDictionary(
+        source=translations.source,
+        rules={key: entry for key, entry in translations.rules.items() if matches(entry)},
+        spells={key: entry for key, entry in translations.spells.items() if matches(entry)},
+        factions={
+            key: entry
+            for key, entry in translations.factions.items()
+            if normalize_system_tag(key[0]) == normalized_system
+        },
+    )
+
+
+def load_translation_dictionary(
+    dictionary_source: str | Path,
+    language: str,
+    system_code: str | None = None,
+) -> TranslationDictionary:
+    content, resolved_source = read_dictionary_source(dictionary_source, system_code)
+    translations = filter_translation_dictionary(
+        parse_translation_dictionary_content(content, resolved_source, language),
+        system_code,
+    )
+
+    filtered_default_source = add_dictionary_system_filter(DEFAULT_DICTIONARY_SOURCE, system_code)
+    if str(dictionary_source).strip() == DEFAULT_DICTIONARY_SOURCE and resolved_source == filtered_default_source:
         try:
             fallback_content, fallback_source = fetch_dictionary_url(FALLBACK_DICTIONARY_SOURCE)
-            fallback_translations = parse_translation_dictionary_content(fallback_content, fallback_source, language)
+            fallback_translations = filter_translation_dictionary(
+                parse_translation_dictionary_content(fallback_content, fallback_source, language),
+                system_code,
+            )
             translations = merge_translation_dictionaries(translations, fallback_translations)
         except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as error:
             logger.warning("Legacy dictionary fallback unavailable or invalid: %s", error)
@@ -622,8 +692,10 @@ def load_translation_dictionary(dictionary_source: str | Path, language: str) ->
 
 
 def pick_translation_description(descriptions: dict[str, str], system_code: str) -> str:
-    normalized_system = system_code.lower()
-    return descriptions.get(normalized_system) or descriptions.get("all") or next(iter(descriptions.values()), "")
+    normalized_system = normalize_system_tag(system_code)
+    if normalized_system:
+        return descriptions.get(normalized_system) or descriptions.get("all") or ""
+    return descriptions.get("all") or next(iter(descriptions.values()), "")
 
 
 def translate_rule_name(value: str, title_map: dict[str, str]) -> str:
@@ -739,7 +811,11 @@ def translate_upgrade_group_type(value: str) -> str:
 
 
 def should_log_missing_translation(translations: TranslationDictionary) -> bool:
-    return str(translations.source).strip() in {DEFAULT_DICTIONARY_SOURCE, FALLBACK_DICTIONARY_SOURCE}
+    source = str(translations.source).strip()
+    if source.startswith(("http://", "https://")):
+        parsed = urllib.parse.urlsplit(source)
+        source = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return source in {DEFAULT_DICTIONARY_SOURCE, FALLBACK_DICTIONARY_SOURCE}
 
 
 def log_missing_translation(message: str, *args: Any) -> None:
@@ -1066,7 +1142,11 @@ def main() -> None:
 
     try:
         data = parse_pdf(args.pdf)
-        translations = load_translation_dictionary(args.dictionary, args.language.lower())
+        translations = load_translation_dictionary(
+            args.dictionary,
+            args.language.lower(),
+            str(data.get("systemCode") or ""),
+        )
         data = apply_translations(data, translations)
         output = json.dumps(data, ensure_ascii=False, indent=2)
 

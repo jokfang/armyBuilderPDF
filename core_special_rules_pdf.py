@@ -86,8 +86,12 @@ def build_system_special_rules_data(
     dictionary_source: str | Path = DEFAULT_DICTIONARY_SOURCE,
     language: str = "fr",
 ) -> dict[str, Any]:
-    translations = load_translation_dictionary(dictionary_source, language.lower())
     normalized_system_code = normalize_system_code(system_code)
+    translations = load_translation_dictionary(
+        dictionary_source,
+        language.lower(),
+        normalized_system_code,
+    )
     rules: list[dict[str, Any]] = []
     aura_rules: list[dict[str, Any]] = []
 

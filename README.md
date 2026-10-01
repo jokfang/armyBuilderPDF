@@ -1,5 +1,26 @@
 # `build_army_books_from_urls.py`
 
+## Télécharger les JSON originaux complets
+
+`getOriginalFromUrls.py` télécharge, sans transformation ni traduction, la réponse
+originale de l'API Army Forge pour chaque URL de `army-book-urls.txt`. L'appel utilise
+`simpleMode=false` afin de demander la version la plus complète disponible.
+
+```powershell
+python .\getOriginalFromUrls.py
+```
+
+Les fichiers sont écrits par défaut dans `generated/original`. Un autre fichier de
+liens ou dossier de destination peut être indiqué ainsi :
+
+```powershell
+python .\getOriginalFromUrls.py .\mes-urls.txt --output-dir .\originaux
+```
+
+Le script ignore les lignes vides, les commentaires et les doublons. Il poursuit le
+lot en cas d'erreur sur une URL et retourne un code différent de zéro si au moins un
+téléchargement a échoué.
+
 Ce script génère en lot des fichiers JSON et PDF à partir d'une liste d'URLs `army-info` d'Army Forge.
 
 Pour chaque URL fournie, le script :
